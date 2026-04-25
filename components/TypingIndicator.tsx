@@ -8,22 +8,49 @@ const Dot = ({ delay }: { delay: number }) => {
     Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
-        Animated.timing(opacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0.3,
+          duration: 400,
+          useNativeDriver: true,
+        }),
       ])
     ).start();
   }, []);
 
   return (
     <Animated.View
-      style={{ opacity }}
-      className="w-2 h-2 rounded-full bg-accent mx-0.5"
+      style={{
+        opacity,
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: "#6366f1",
+        marginHorizontal: 2,
+      }}
     />
   );
 };
 
 export const TypingIndicator = () => (
-  <View className="flex-row items-center px-4 py-3 mx-4 mb-2 rounded-2xl rounded-bl-sm bg-surface-muted self-start">
+  <View
+    style={{
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      marginHorizontal: 16,
+      marginBottom: 8,
+      borderRadius: 16,
+      borderBottomLeftRadius: 4,
+      backgroundColor: "#18181b",
+      alignSelf: "flex-start",
+    }}
+  >
     <Dot delay={0} />
     <Dot delay={160} />
     <Dot delay={320} />
