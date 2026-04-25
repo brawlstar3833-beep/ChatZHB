@@ -4,12 +4,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
   StyleSheet,
 } from "react-native";
-import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Send, Sparkles, Trash2 } from "lucide-react-native";
 
@@ -28,19 +28,17 @@ const welcomeMessage: Message = {
   timestamp: Date.now(),
 };
 
-type ListItem = Message | "typing";
-
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([welcomeMessage]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const listRef = useRef<FlashList<ListItem>>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   const hasText = input.trim().length > 0;
 
   const scrollToBottom = useCallback((delay = 80) => {
     setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      scrollRef.current?.scrollToEnd({ animated: true });
     }, delay);
   }, []);
 
@@ -100,18 +98,6 @@ export default function ChatScreen() {
     setIsTyping(false);
   }, []);
 
-  const listData: ListItem[] = isTyping ? [...messages, "typing"] : messages;
-
-  const renderItem = useCallback(({ item }: { item: ListItem }) => {
-    if (item === "typing") return <TypingIndicator />;
-    return <ChatMessage message={item} />;
-  }, []);
-
-  const keyExtractor = useCallback((item: ListItem) => {
-    if (item === "typing") return "typing-indicator";
-    return item.id;
-  }, []);
-
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* ── Header ── */}
@@ -135,16 +121,19 @@ export default function ChatScreen() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
-        <FlashList
-          ref={listRef}
-          data={listData}
-          renderItem={renderItem}
-          keyExtractor={keyExtractor}
-          estimatedItemSize={80}
+        <ScrollView
+          ref={scrollRef}
+          style={{ flex: 1 }}
           contentContainerStyle={{ paddingVertical: 16 }}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           onContentSizeChange={() => scrollToBottom(0)}
-        />
+        >
+          {messages.map((msg) => (
+            <ChatMessage key={msg.id} message={msg} />
+          ))}
+          {isTyping && <TypingIndicator />}
+        </ScrollView>
 
         {/* ── Input Bar ── */}
         <View style={styles.inputBar}>
@@ -165,7 +154,10 @@ export default function ChatScreen() {
             disabled={!hasText || isTyping}
             style={[
               styles.sendBtn,
-              { backgroundColor: hasText && !isTyping ? "#6366f1" : "#27272a" },
+              {
+                backgroundColor:
+                  hasText && !isTyping ? "#6366f1" : "#27272a",
+              },
             ]}
             accessibilityLabel="Отправить"
           >
@@ -202,7 +194,6 @@ const styles = StyleSheet.create({
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
   },
   headerTitle: {
     color: "#fafafa",
@@ -218,17 +209,15 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderTopWidth: 1,
     borderTopColor: "#27272a",
     backgroundColor: "#09090b",
+    gap: 8,
   },
   inputWrapper: {
     flex: 1,
-    flexDirection: "row",
-    alignItems: "flex-end",
     backgroundColor: "#18181b",
     borderRadius: 20,
     borderWidth: 1,
@@ -237,9 +226,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     minHeight: 48,
     maxHeight: 120,
+    justifyContent: "center",
   },
   textInput: {
-    flex: 1,
     color: "#fafafa",
     fontSize: 15,
     lineHeight: 22,
