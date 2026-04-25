@@ -7,22 +7,16 @@ import {
   Text,
   TextInput,
   View,
+  StyleSheet,
 } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Send, Sparkles, Trash2 } from "lucide-react-native";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from "react-native-reanimated";
 
 import { sendMessage, AIMessage } from "../api/ai";
 import { ChatMessage } from "../components/ChatMessage";
 import { TypingIndicator } from "../components/TypingIndicator";
 import { Message } from "../types/chat";
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const WELCOME_ID = "welcome";
 
@@ -34,36 +28,25 @@ const welcomeMessage: Message = {
   timestamp: Date.now(),
 };
 
+type ListItem = Message | "typing";
+
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([welcomeMessage]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const listRef = useRef<FlashList<Message | "typing">>(null);
-
-  // ─── Send button scale animation ───
-  const sendScale = useSharedValue(1);
-  const sendAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: sendScale.value }],
-  }));
+  const listRef = useRef<FlashList<ListItem>>(null);
 
   const hasText = input.trim().length > 0;
 
-  // ─── Scroll to bottom helper ───
   const scrollToBottom = useCallback((delay = 80) => {
     setTimeout(() => {
       listRef.current?.scrollToEnd({ animated: true });
     }, delay);
   }, []);
 
-  // ─── Send message ───
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || isTyping) return;
-
-    // Press animation
-    sendScale.value = withSpring(0.85, {}, () => {
-      sendScale.value = withSpring(1);
-    });
 
     const userMsg: Message = {
       id: `user-${Date.now()}`,
@@ -77,10 +60,12 @@ export default function ChatScreen() {
     setIsTyping(true);
     scrollToBottom(60);
 
-    // Build context for API (exclude welcome placeholder)
     const history: AIMessage[] = [...messages, userMsg]
       .filter((m) => m.id !== WELCOME_ID)
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
 
     try {
       const reply = await sendMessage(history);
@@ -97,7 +82,9 @@ export default function ChatScreen() {
       const errorMsg: Message = {
         id: `error-${Date.now()}`,
         role: "assistant",
-        content: `**Ошибка:** ${err instanceof Error ? err.message : "Что-то пошло не так."}`,
+        content: `**Ошибка:** ${
+          err instanceof Error ? err.message : "Что-то пошло не так."
+        }`,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -107,24 +94,18 @@ export default function ChatScreen() {
     }
   }, [input, isTyping, messages, scrollToBottom]);
 
-  // ─── Clear chat ───
   const handleClear = useCallback(() => {
     setMessages([welcomeMessage]);
     setInput("");
     setIsTyping(false);
   }, []);
 
-  // ─── List data ───
-  type ListItem = Message | "typing";
   const listData: ListItem[] = isTyping ? [...messages, "typing"] : messages;
 
-  const renderItem = useCallback(
-    ({ item }: { item: ListItem }) => {
-      if (item === "typing") return <TypingIndicator />;
-      return <ChatMessage message={item} />;
-    },
-    []
-  );
+  const renderItem = useCallback(({ item }: { item: ListItem }) => {
+    if (item === "typing") return <TypingIndicator />;
+    return <ChatMessage message={item} />;
+  }, []);
 
   const keyExtractor = useCallback((item: ListItem) => {
     if (item === "typing") return "typing-indicator";
@@ -132,27 +113,25 @@ export default function ChatScreen() {
   }, []);
 
   return (
-    <SafeAreaView className="flex-1 bg-surface" edges={["top", "bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
       {/* ── Header ── */}
-      <View className="flex-row items-center justify-between px-5 py-3 border-b border-surface-card">
-        <View className="flex-row items-center gap-2">
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
           <Sparkles size={20} color="#6366f1" />
-          <Text className="text-text-primary text-[17px] font-semibold tracking-wide">
-            Gemini Clone
-          </Text>
+          <Text style={styles.headerTitle}>Gemini Clone</Text>
         </View>
         <Pressable
           onPress={handleClear}
-          className="p-2 rounded-xl active:opacity-60"
+          style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.5 }]}
           accessibilityLabel="Очистить чат"
         >
           <Trash2 size={18} color="#52525b" />
         </Pressable>
       </View>
 
-      {/* ── Messages ── */}
+      {/* ── Messages + Input ── */}
       <KeyboardAvoidingView
-        className="flex-1"
+        style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
@@ -168,29 +147,27 @@ export default function ChatScreen() {
         />
 
         {/* ── Input Bar ── */}
-        <View className="flex-row items-end gap-2 px-4 py-3 border-t border-surface-card bg-surface">
-          <View className="flex-1 flex-row items-end bg-surface-muted rounded-2xl border border-surface-card px-4 py-2 min-h-[48px]">
+        <View style={styles.inputBar}>
+          <View style={styles.inputWrapper}>
             <TextInput
-              className="flex-1 text-text-primary text-[15px] leading-[22px] max-h-[120px]"
+              style={styles.textInput}
               placeholder="Напиши сообщение..."
               placeholderTextColor="#52525b"
               value={input}
               onChangeText={setInput}
               multiline
               returnKeyType="default"
-              style={{ paddingTop: 4, paddingBottom: 4 }}
             />
           </View>
 
-          {/* Send button */}
-          <AnimatedPressable
-            style={sendAnimStyle}
+          <Pressable
             onPress={handleSend}
             disabled={!hasText || isTyping}
+            style={[
+              styles.sendBtn,
+              { backgroundColor: hasText && !isTyping ? "#6366f1" : "#27272a" },
+            ]}
             accessibilityLabel="Отправить"
-            className={`w-[48px] h-[48px] rounded-2xl items-center justify-center ${
-              hasText && !isTyping ? "bg-accent" : "bg-surface-card"
-            }`}
           >
             {isTyping ? (
               <ActivityIndicator size="small" color="#6366f1" />
@@ -201,9 +178,79 @@ export default function ChatScreen() {
                 strokeWidth={2}
               />
             )}
-          </AnimatedPressable>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#09090b",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#27272a",
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  headerTitle: {
+    color: "#fafafa",
+    fontSize: 17,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+    marginLeft: 8,
+  },
+  clearBtn: {
+    padding: 8,
+    borderRadius: 12,
+  },
+  inputBar: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#27272a",
+    backgroundColor: "#09090b",
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    backgroundColor: "#18181b",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#27272a",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    minHeight: 48,
+    maxHeight: 120,
+  },
+  textInput: {
+    flex: 1,
+    color: "#fafafa",
+    fontSize: 15,
+    lineHeight: 22,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  sendBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});
