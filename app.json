@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Gemini Clone",
+    "slug": "gemini-clone",
+    "version": "1.0.0",
+    "scheme": "gemini-clone",
+    "web": { "bundler": "metro" },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": { "kotlinVersion": "1.9.0" }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
