@@ -1,53 +1,102 @@
-import Groq from "groq-sdk";
-import { Message } from "../types/chat";
+// Сервис для работы с Google Gemini API
+import { Message, ImageAttachment } from "../types/chat";
 
-const GROQ_API_KEY = process.env.EXPO_PUBLIC_GROQ_API_KEY;
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? "";
 
-if (!GROQ_API_KEY) {
-  console.warn("⚠️  EXPO_PUBLIC_GROQ_API_KEY не задан в .env");
-}
+// Модель Gemini 2.0 Flash-Lite (быстрая и дешёвая)
+const MODEL = "gemini-2.0-flash-lite";
+const BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
-const groq = new Groq({ apiKey: GROQ_API_KEY ?? "" });
+const SYSTEM_INSTRUCTION = `Ты — продвинутый ИИ-ассистент Zhan AI. Отвечай чётко и по существу. 
+Используй Markdown: заголовки (##), жирный (**text**), списки (- item), код (\`\`\`lang). 
+При анализе изображений описывай детально что видишь.`;
 
-const SYSTEM_PROMPT = `Ты — продвинутый ИИ-ассистент. Отвечай чётко и по существу. Используй Markdown для структурирования ответа: заголовки (##), жирный текст (**text**), списки (- item), блоки кода (\`\`\`lang). При написании кода всегда указывай язык.`;
+// --- Вспомогательная функция: конвертация сообщений в формат Gemini ---
+function buildContents(messages: Message[]) {
+  return messages
+    .filter((m) => m.role !== "system")
+    .map((m) => {
+      const parts: object[] = [];
 
-export interface AIMessage {
-  role: "user" | "assistant";
-  content: string;
-}
+      // Если есть прикреплённое изображение
+      if (m.image) {
+        parts.push({
+          inlineData: {
+            mimeType: m.image.mimeType,
+            data: m.image.base64,
+          },
+        });
+      }
 
-/**
- * Отправляет историю сообщений в Groq и возвращает полный ответ ассистента.
- * @param messages - массив сообщений чата (без system prompt)
- * @returns строка с ответом модели
- */
-export async function sendMessage(messages: AIMessage[]): Promise<string> {
-  try {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-      ],
-      temperature: 0.7,
-      max_tokens: 2048,
+      // Текстовая часть
+      if (m.content) {
+        parts.push({ text: m.content });
+      }
+
+      return {
+        role: m.role === "assistant" ? "model" : "user",
+        parts,
+      };
     });
+}
 
-    const text = completion.choices[0]?.message?.content;
-
-    if (!text) {
-      throw new Error("Пустой ответ от модели.");
-    }
-
-    return text;
-  } catch (err: unknown) {
-    if (err instanceof Groq.APIError) {
-      const status = err.status;
-      if (status === 401) throw new Error("Неверный API-ключ Groq.");
-      if (status === 429) throw new Error("Превышен лимит запросов. Попробуй позже.");
-      if (status === 503) throw new Error("Groq недоступен. Попробуй позже.");
-      throw new Error(`Ошибка API Groq (${status}): ${err.message}`);
-    }
-    throw new Error("Неизвестная ошибка при запросе к AI.");
+// --- Основная функция отправки сообщения ---
+export async function sendMessage(
+  messages: Message[],
+  image?: ImageAttachment
+): Promise<string> {
+  if (!API_KEY) {
+    throw new Error("EXPO_PUBLIC_GEMINI_API_KEY не задан в .env");
   }
+
+  const contents = buildContents(messages);
+
+  // Если передано изображение к последнему сообщению — оно уже включено через buildContents
+  const body = {
+    system_instruction: {
+      parts: [{ text: SYSTEM_INSTRUCTION }],
+    },
+    contents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 2048,
+    },
+  };
+
+  const response = await fetch(`${BASE_URL}?key=${API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const status = response.status;
+
+    if (status === 400) throw new Error("Неверный запрос к Gemini API.");
+    if (status === 401 || status === 403)
+      throw new Error("Неверный API-ключ Gemini. Проверь .env файл.");
+    if (status === 429)
+      throw new Error("Превышен лимит запросов Gemini. Попробуй позже.");
+    if (status === 503)
+      throw new Error("Gemini API временно недоступен.");
+
+    const msg = (errorData as any)?.error?.message ?? "Неизвестная ошибка";
+    throw new Error(`Ошибка Gemini (${status}): ${msg}`);
+  }
+
+  const data = await response.json();
+  const text: string | undefined =
+    data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!text) {
+    // Проверяем причину блокировки (safety filters)
+    const reason = data?.candidates?.[0]?.finishReason;
+    if (reason === "SAFETY") {
+      throw new Error("Запрос заблокирован фильтрами безопасности Gemini.");
+    }
+    throw new Error("Gemini вернул пустой ответ.");
+  }
+
+  return text;
 }
