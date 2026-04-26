@@ -1,4 +1,5 @@
-import React, { useCallback, useRef, useState } from "react";
+// Главный экран Zhan AI 2.0
+import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -8,119 +9,201 @@ import {
   Text,
   TextInput,
   View,
+  Image,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Send, Sparkles, Trash2 } from "lucide-react-native";
+import { Settings, Send, Image as ImageIcon, Mic, X } from "lucide-react-native";
+import * as ImagePicker from "expo-image-picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { sendMessage, AIMessage } from "../api/ai";
 import { ChatMessage } from "../components/ChatMessage";
 import { TypingIndicator } from "../components/TypingIndicator";
-import { Message } from "../types/chat";
+import { SettingsModal } from "../components/SettingsModal";
+import { useChat } from "../hooks/useChat";
+import { useTheme } from "../hooks/useTheme";
+import { Theme, ImageAttachment } from "../types/chat";
 
-const WELCOME_ID = "welcome";
-
-const welcomeMessage: Message = {
-  id: WELCOME_ID,
-  role: "assistant",
-  content:
-    "## Привет! Я твой AI-ассистент 👋\n\nЯ использую модель **Llama 3.3 70B** от Groq.\n\nМогу помочь с:\n- 💡 Вопросами и объяснениями\n- 💻 Написанием и разбором кода\n- 📝 Текстами и аналитикой\n\nЧем займёмся?",
-  timestamp: Date.now(),
-};
+const THEME_STORAGE_KEY = "@zhan_ai_theme";
 
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<Message[]>([welcomeMessage]);
+  const [themePreference, setThemePreference] = useState<Theme>("dark");
+  const [settingsVisible, setSettingsVisible] = useState(false);
   const [input, setInput] = useState("");
-  const [isTyping, setIsTyping] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<ImageAttachment | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+
   const scrollRef = useRef<ScrollView>(null);
+  const { colors } = useTheme(themePreference);
+  const { messages, isTyping, isLoaded, sendMessage, clearHistory } = useChat();
 
-  const hasText = input.trim().length > 0;
+  const hasContent = input.trim().length > 0 || attachedImage !== null;
 
+  // --- Загрузка сохранённой темы ---
+  useEffect(() => {
+    AsyncStorage.getItem(THEME_STORAGE_KEY)
+      .then((saved) => {
+        if (saved) setThemePreference(saved as Theme);
+      })
+      .catch(() => {});
+  }, []);
+
+  // --- Сохранение темы при изменении ---
+  const handleThemeChange = useCallback((t: Theme) => {
+    setThemePreference(t);
+    AsyncStorage.setItem(THEME_STORAGE_KEY, t).catch(() => {});
+  }, []);
+
+  // --- Скролл вниз ---
   const scrollToBottom = useCallback((delay = 80) => {
     setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
     }, delay);
   }, []);
 
+  // --- Отправка сообщения ---
   const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if (!text || isTyping) return;
-
-    const userMsg: Message = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: text,
-      timestamp: Date.now(),
-    };
-
+    if (!hasContent || isTyping) return;
+    const text = input;
+    const image = attachedImage ?? undefined;
     setInput("");
-    setMessages((prev) => [...prev, userMsg]);
-    setIsTyping(true);
+    setAttachedImage(null);
     scrollToBottom(60);
+    await sendMessage(text, image);
+    scrollToBottom(120);
+  }, [hasContent, isTyping, input, attachedImage, sendMessage, scrollToBottom]);
 
-    const history: AIMessage[] = [...messages, userMsg]
-      .filter((m) => m.id !== WELCOME_ID)
-      .map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }));
-
-    try {
-      const reply = await sendMessage(history);
-
-      const assistantMsg: Message = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: reply,
-        timestamp: Date.now(),
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err: unknown) {
-      const errorMsg: Message = {
-        id: `error-${Date.now()}`,
-        role: "assistant",
-        content: `**Ошибка:** ${
-          err instanceof Error ? err.message : "Что-то пошло не так."
-        }`,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
-    } finally {
-      setIsTyping(false);
-      scrollToBottom(100);
+  // --- Выбор изображения ---
+  const handlePickImage = useCallback(async () => {
+    // Запрашиваем разрешение
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Нет доступа",
+        "Разреши доступ к галерее в настройках телефона."
+      );
+      return;
     }
-  }, [input, isTyping, messages, scrollToBottom]);
 
-  const handleClear = useCallback(() => {
-    setMessages([welcomeMessage]);
-    setInput("");
-    setIsTyping(false);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+      base64: true, // Нужен для отправки в Gemini
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      if (!asset.base64) {
+        Alert.alert("Ошибка", "Не удалось получить данные изображения.");
+        return;
+      }
+      setAttachedImage({
+        uri: asset.uri,
+        base64: asset.base64,
+        mimeType: "image/jpeg",
+      });
+    }
   }, []);
 
+  // --- Камера ---
+  const handleCamera = useCallback(async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Нет доступа", "Разреши доступ к камере в настройках.");
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.8,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      if (!asset.base64) return;
+      setAttachedImage({
+        uri: asset.uri,
+        base64: asset.base64,
+        mimeType: "image/jpeg",
+      });
+    }
+  }, []);
+
+  // --- Голосовой ввод (заглушка — показывает инструкцию) ---
+  const handleVoice = useCallback(() => {
+    Alert.alert(
+      "Голосовой ввод",
+      "Для голосового ввода нажми на микрофон на клавиатуре телефона при вводе текста — это самый надёжный способ в Expo Go.\n\nПолноценный STT доступен в кастомной сборке.",
+      [{ text: "Понятно" }]
+    );
+  }, []);
+
+  // --- Выбор фото: галерея или камера ---
+  const handleImagePress = useCallback(() => {
+    Alert.alert("Прикрепить изображение", "Выбери источник:", [
+      { text: "Галерея", onPress: handlePickImage },
+      { text: "Камера", onPress: handleCamera },
+      { text: "Отмена", style: "cancel" },
+    ]);
+  }, [handlePickImage, handleCamera]);
+
+  if (!isLoaded) {
+    return (
+      <View style={[styles.loadingContainer, { backgroundColor: colors.bg }]}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      edges={["top", "bottom"]}
+    >
       {/* ── Header ── */}
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          {
+            backgroundColor: colors.headerBg,
+            borderBottomColor: colors.headerBorder,
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
-          <Sparkles size={20} color="#6366f1" />
-          <Text style={styles.headerTitle}>Gemini Clone</Text>
+          {/* Логотип */}
+          <View style={[styles.logoCircle, { backgroundColor: colors.accentDim }]}>
+            <Text style={[styles.logoText, { color: colors.accent }]}>Z</Text>
+          </View>
+          <View>
+            <Text style={[styles.headerTitle, { color: colors.headerText }]}>
+              Zhan AI
+            </Text>
+            <Text style={[styles.headerSub, { color: colors.textMuted }]}>
+              2.0 · Gemini Flash
+            </Text>
+          </View>
         </View>
+
+        {/* Кнопка настроек */}
         <Pressable
-          onPress={handleClear}
-          style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.5 }]}
-          accessibilityLabel="Очистить чат"
+          onPress={() => setSettingsVisible(true)}
+          style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
         >
-          <Trash2 size={18} color="#52525b" />
+          <Settings size={20} color={colors.iconColor} />
         </Pressable>
       </View>
 
-      {/* ── Messages + Input ── */}
+      {/* ── Чат + Инпут ── */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
+        {/* Список сообщений */}
         <ScrollView
           ref={scrollRef}
           style={{ flex: 1 }}
@@ -130,18 +213,85 @@ export default function ChatScreen() {
           onContentSizeChange={() => scrollToBottom(0)}
         >
           {messages.map((msg) => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage key={msg.id} message={msg} colors={colors} />
           ))}
-          {isTyping && <TypingIndicator />}
+          {isTyping && <TypingIndicator colors={colors} />}
         </ScrollView>
 
-        {/* ── Input Bar ── */}
-        <View style={styles.inputBar}>
-          <View style={styles.inputWrapper}>
+        {/* Превью прикреплённого изображения */}
+        {attachedImage && (
+          <View
+            style={[
+              styles.imagePreviewContainer,
+              { backgroundColor: colors.bgMuted, borderTopColor: colors.border },
+            ]}
+          >
+            <Image
+              source={{ uri: attachedImage.uri }}
+              style={styles.imagePreview}
+              resizeMode="cover"
+            />
+            <Pressable
+              onPress={() => setAttachedImage(null)}
+              style={[styles.removeImageBtn, { backgroundColor: colors.bgCard }]}
+            >
+              <X size={14} color={colors.textPrimary} />
+            </Pressable>
+            <Text style={[styles.imagePreviewLabel, { color: colors.textSecondary }]}>
+              Изображение прикреплено
+            </Text>
+          </View>
+        )}
+
+        {/* ── Поле ввода ── */}
+        <View
+          style={[
+            styles.inputBar,
+            {
+              backgroundColor: colors.bg,
+              borderTopColor: colors.border,
+            },
+          ]}
+        >
+          {/* Кнопка изображения */}
+          <Pressable
+            onPress={handleImagePress}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { opacity: pressed ? 0.5 : 1 },
+            ]}
+          >
+            <ImageIcon
+              size={22}
+              color={attachedImage ? colors.accent : colors.iconColor}
+            />
+          </Pressable>
+
+          {/* Кнопка микрофона */}
+          <Pressable
+            onPress={handleVoice}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { opacity: pressed ? 0.5 : 1 },
+            ]}
+          >
+            <Mic size={22} color={colors.iconColor} />
+          </Pressable>
+
+          {/* Текстовый инпут */}
+          <View
+            style={[
+              styles.inputWrapper,
+              {
+                backgroundColor: colors.inputBg,
+                borderColor: colors.inputBorder,
+              },
+            ]}
+          >
             <TextInput
-              style={styles.textInput}
+              style={[styles.textInput, { color: colors.inputText }]}
               placeholder="Напиши сообщение..."
-              placeholderTextColor="#52525b"
+              placeholderTextColor={colors.placeholder}
               value={input}
               onChangeText={setInput}
               multiline
@@ -149,30 +299,44 @@ export default function ChatScreen() {
             />
           </View>
 
+          {/* Кнопка отправки */}
           <Pressable
             onPress={handleSend}
-            disabled={!hasText || isTyping}
+            disabled={!hasContent || isTyping}
             style={[
               styles.sendBtn,
               {
                 backgroundColor:
-                  hasText && !isTyping ? "#6366f1" : "#27272a",
+                  hasContent && !isTyping
+                    ? colors.sendActive
+                    : colors.sendInactive,
               },
             ]}
-            accessibilityLabel="Отправить"
           >
             {isTyping ? (
-              <ActivityIndicator size="small" color="#6366f1" />
+              <ActivityIndicator size="small" color={colors.accent} />
             ) : (
               <Send
-                size={20}
-                color={hasText ? "#ffffff" : "#52525b"}
+                size={18}
+                color={
+                  hasContent ? colors.sendIconActive : colors.sendIconInactive
+                }
                 strokeWidth={2}
               />
             )}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ── Модальное окно настроек ── */}
+      <SettingsModal
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+        theme={themePreference}
+        onThemeChange={handleThemeChange}
+        onClearHistory={clearHistory}
+        colors={colors}
+      />
     </SafeAreaView>
   );
 }
@@ -180,66 +344,106 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#09090b",
   },
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Header
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#27272a",
   },
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+  },
+  logoCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  logoText: {
+    fontSize: 18,
+    fontWeight: "700",
   },
   headerTitle: {
-    color: "#fafafa",
-    fontSize: 17,
-    fontWeight: "600",
-    letterSpacing: 0.3,
-    marginLeft: 8,
+    fontSize: 16,
+    fontWeight: "700",
   },
-  clearBtn: {
+  headerSub: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  iconBtn: {
     padding: 8,
-    borderRadius: 12,
+    borderRadius: 10,
   },
+  // Input bar
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "#27272a",
-    backgroundColor: "#09090b",
-    gap: 8,
+    gap: 4,
   },
   inputWrapper: {
     flex: 1,
-    backgroundColor: "#18181b",
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#27272a",
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    minHeight: 48,
+    minHeight: 44,
     maxHeight: 120,
     justifyContent: "center",
   },
   textInput: {
-    color: "#fafafa",
     fontSize: 15,
     lineHeight: 22,
-    paddingTop: 4,
-    paddingBottom: 4,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   sendBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
+  },
+  // Image preview
+  imagePreviewContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    gap: 10,
+  },
+  imagePreview: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+  },
+  removeImageBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -20,
+    marginTop: -30,
+  },
+  imagePreviewLabel: {
+    fontSize: 13,
+    flex: 1,
   },
 });
